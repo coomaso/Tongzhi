@@ -109,12 +109,8 @@ def process_article(title, url, date):
     msg = f"""## {title}
 
 📅 发布时间：{date}
-
----
-
 📝 **摘要：**  
 {summary}
-
 """
     if attachments:
         msg += "\n📎 **附件：**\n"
