@@ -1,5 +1,7 @@
 import os
 import re
+import json
+import codecs
 import requests
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
@@ -10,7 +12,6 @@ from sumy.summarizers.text_rank import TextRankSummarizer
 # ========== 工具函数 ==========
 
 def generate_textrank_summary(text, sentence_count=3):
-    # 分句（中文）
     sentences = re.split(r"[。！？!?]", text)
     sentences = [s.strip() for s in sentences if s.strip()]
     processed_text = "。".join(sentences)
@@ -46,7 +47,7 @@ def fetch_news_list():
     if not match:
         raise ValueError("未找到 domStr 字段")
 
-    html_encoded = match.group(1).encode().decode("unicode_escape")
+    html_encoded = codecs.decode(match.group(1), "unicode_escape")
     soup = BeautifulSoup(html_encoded, "html.parser")
 
     base_url = "https://www.hbjzxh.org.cn"
@@ -57,7 +58,8 @@ def fetch_news_list():
         date_span = item.select_one("span.normal_time")
 
         if a_tag and date_span:
-            title = a_tag.get("title", "").strip()
+            title_raw = a_tag.get("title", "").strip()
+            title = title_raw.encode("latin1").decode("utf-8", errors="ignore")
             href = base_url + a_tag.get("href", "").strip()
             date = date_span.get_text(strip=True)
             results.append((title, href, date))
@@ -68,8 +70,19 @@ def fetch_news_list():
 
 def process_article(title, url, date):
     print(f"📄 正在处理：《{title}》")
-    resp = requests.get(url)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": "https://www.hbjzxh.org.cn/",
+        "Accept-Language": "zh-CN,zh;q=0.9"
+    }
+
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 403:
+        print(f"❌ 403 Forbidden：{url}")
+        return
     resp.raise_for_status()
+
     soup = BeautifulSoup(resp.text, "html.parser")
 
     # 提取正文
@@ -82,10 +95,10 @@ def process_article(title, url, date):
         print("⚠️ 正文为空")
         return
 
-    # 使用 TextRank 摘要
+    # TextRank 摘要提取
     summary = generate_textrank_summary(full_text, sentence_count=3)
 
-    # 下载附件
+    # 附件处理
     attachments = []
     attach_div = soup.select_one("div.attachBox")
     if attach_div:
@@ -105,19 +118,24 @@ def process_article(title, url, date):
             except Exception as e:
                 print(f"❌ 附件下载失败：{name} - {e}")
 
-    # 构造通知 Markdown
+    # 构建通知 Markdown
     msg = f"""## {title}
 
 📅 发布时间：{date}
+
+---
+
 📝 **摘要：**  
 {summary}
+
 """
+
     if attachments:
         msg += "\n📎 **附件：**\n"
         for name, path in attachments:
             msg += f"- [{name}]({path})\n"
 
-    # 写入文件
+    # 保存
     safe_title = safe_filename(title)
     md_path = os.path.join("通知输出", f"{safe_title}.md")
     with open(md_path, "w", encoding="utf-8") as f:
